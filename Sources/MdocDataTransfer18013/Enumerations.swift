@@ -34,7 +34,7 @@ public enum TransferStatus: String, Sendable {
 
 /// Possible error codes
 public enum ErrorCode: Int, CustomStringConvertible, Sendable {
-	case documents_not_provided
+	case documents_not_provided_or_manual_mode_is_not_enabled
 	case invalidInputDocument
 	case invalidUrl
 	case device_private_key_not_provided
@@ -47,10 +47,12 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 	case sessionEncryptionNotInitialized
 	case deviceEngagementMissing
 	case readerKeyMissing
+    case noRequestReceived
+    case notSetToSendResponseManually
 	
 	public var description: String {
 		switch self {
-		case .documents_not_provided: return "DOCUMENTS_NOT_PROVIDED"
+		case .documents_not_provided_or_manual_mode_is_not_enabled: return "DOCUMENTS_NOT_PROVIDED_OR_MANUAL_MODE_IS_NOT_ENABLED"
 		case .invalidInputDocument: return "INVALID_INPUT_DOCUMENT"
 		case .invalidUrl: return "INVALID_URL"
 		case .device_private_key_not_provided: return "DEVICE_PRIVATE_KEY_NOT_PROVIDED"
@@ -62,6 +64,8 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 		case .deviceEngagementMissing: return "DEVICE_ENGAGEMENT_MISSING"
 		case .readerKeyMissing: return "READER_KEY_MISSING"
 		case .sessionEncryptionNotInitialized: return "SESSION_ENCYPTION_NOT_INITIALIZED"
+        case .noRequestReceived: return "DID_NOT_RECEIVE_REQUEST"
+        case .notSetToSendResponseManually: return "NOT_SET_TO_SEND_RESPONSE_MANUALLY"
 		default: return "GENERIC_ERROR"
 		}
 	}
@@ -76,6 +80,7 @@ public enum InitializeKeys: String, Sendable {
 	case device_private_key_obj
 	case trusted_certificates
 	case device_auth_method
+    case send_response_manually
 }
 
 /// String keys for the user request dictionary

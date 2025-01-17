@@ -45,6 +45,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var advertising: Bool = false
 	public var error: Error? = nil  { willSet { handleErrorSet(newValue) }}
 	public var status: TransferStatus = .initializing { willSet { handleStatusChange(newValue) } }
+    public var sendResponseManually: Bool = false
 	var readBuffer = Data()
 	var sendBuffer = [Data]()
 	var numBlocks: Int = 0
@@ -52,10 +53,11 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	var initSuccess:Bool = false
 	
 	public init(parameters: [String: Any]) throws {
-		guard let (docs, devicePrivateKeys, iaca, dauthMethod) = MdocHelpers.initializeData(parameters: parameters) else {
-			throw MdocHelpers.makeError(code: .documents_not_provided)
+        guard let (docs, devicePrivateKeys, iaca, dauthMethod, sendResponseManually) = MdocHelpers.initializeData(parameters: parameters) else {
+            throw MdocHelpers.makeError(code: .documents_not_provided_or_manual_mode_is_not_enabled)
 		}
 		self.docs = docs
+        self.sendResponseManually = sendResponseManually
 		self.devicePrivateKeys = devicePrivateKeys
 		self.iaca = iaca
 		self.dauthMethod = dauthMethod
@@ -208,12 +210,12 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		delegate?.didChangeStatus(newValue)
 		if newValue == .requestReceived {
 			peripheralManager.stopAdvertising()
-			let decodedRes = MdocHelpers.decodeRequestAndInformUser(deviceEngagement: deviceEngagement, docs: docs, iaca: iaca, requestData: readBuffer, devicePrivateKeys: devicePrivateKeys, dauthMethod: dauthMethod, readerKeyRawData: nil, handOver: BleTransferMode.QRHandover)
+            let decodedRes = MdocHelpers.decodeRequestAndInformUser(deviceEngagement: deviceEngagement, docs: docs, iaca: iaca, requestData: readBuffer, devicePrivateKeys: devicePrivateKeys, dauthMethod: dauthMethod, readerKeyRawData: nil, handOver: BleTransferMode.QRHandover, sendResponseManually: sendResponseManually)
 			switch decodedRes {
 			case .success(let decoded):
 				self.deviceRequest = decoded.deviceRequest
-				sessionEncryption = decoded.sessionEncryption
-				if decoded.isValidRequest {
+                self.sessionEncryption = decoded.sessionEncryption
+                if decoded.isValidRequest {
 					delegate?.didReceiveRequest(decoded.userRequestInfo, handleSelected: userSelected)
 				} else {
 					userSelected(false, nil)
@@ -308,7 +310,13 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 			sendDataWithUpdates() 
 		}
 	}
-
-
+    
+    func sendResponse(_ deviceResponse: Data) throws {
+        guard status == .requestReceived else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Did not receive a request."); }
+        guard sendResponseManually else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Initialize with send_response_manually to use this function");  }
+        
+        prepareDataToSend(deviceResponse)
+        sendDataWithUpdates()
+    }
 }
 
