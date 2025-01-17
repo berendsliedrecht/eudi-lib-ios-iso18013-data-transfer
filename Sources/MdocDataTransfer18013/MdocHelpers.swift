@@ -95,7 +95,7 @@ public class MdocHelpers {
 	///   - handOver: handOver structure
 	/// - Returns: A ``DeviceRequest`` object
 
-    public static func decodeRequestAndInformUser(deviceEngagement: DeviceEngagement?, docs: [String: IssuerSigned]?, iaca: [SecCertificate], requestData: Data, devicePrivateKeys: [String: CoseKeyPrivate], dauthMethod: DeviceAuthMethod, readerKeyRawData: [UInt8]?, handOver: CBOR, sendResponseManually: Bool) -> Result<(sessionEncryption: SessionEncryption, deviceRequest: DeviceRequest, userRequestInfo: UserRequestInfo?, isValidRequest: Bool), Error> {
+    public static func decodeRequestAndInformUser(deviceEngagement: DeviceEngagement?, docs: [String: IssuerSigned]?, iaca: [SecCertificate], requestData: Data, devicePrivateKeys: [String: CoseKeyPrivate]?, dauthMethod: DeviceAuthMethod?, readerKeyRawData: [UInt8]?, handOver: CBOR, sendResponseManually: Bool) -> Result<(sessionEncryption: SessionEncryption, deviceRequest: DeviceRequest, userRequestInfo: UserRequestInfo?, isValidRequest: Bool), Error> {
 		do {
 			guard let seCbor = try CBOR.decode([UInt8](requestData)) else { logger.error("Request Data is not Cbor"); return .failure(Self.makeError(code: .requestDecodeError)) }
 			guard var se = SessionEstablishment(cbor: seCbor) else { logger.error("Request Data cannot be decoded to session establisment"); return .failure(Self.makeError(code: .requestDecodeError)) }
@@ -113,7 +113,7 @@ public class MdocHelpers {
                 return .success((sessionEncryption: sessionEncryption, deviceRequest: deviceRequest, userRequestInfo: nil, true))
             }
 
-			guard let (drTest, validRequestItems, errorRequestItems) = try Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs!, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, devicePrivateKeys: devicePrivateKeys, dauthMethod: dauthMethod) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
+			guard let (drTest, validRequestItems, errorRequestItems) = try Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs!, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, devicePrivateKeys: devicePrivateKeys!, dauthMethod: dauthMethod!) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
 			let bInvalidReq = (drTest.documents == nil)
 			var userRequestInfo = UserRequestInfo(validItemsRequested: validRequestItems, errorItemsRequested: errorRequestItems)
 			if let docR = deviceRequest.docRequests.first {
