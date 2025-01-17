@@ -150,8 +150,6 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		qrCodePayload = deviceEngagement!.getQrCodePayload()
 		logger.info("Created qrCode payload: \(qrCodePayload!)")
 #endif
-		// todo: issuerNameSpaces is not mandatory according to specs, need to change
-		guard docs.values.allSatisfy({ $0.issuerNameSpaces != nil }) else { error = MdocHelpers.makeError(code: .invalidInputDocument); return }
 		// Check that the peripheral manager has been authorized to use Bluetooth.
 		guard peripheralManager.state != .unauthorized else { error = MdocHelpers.makeError(code: .bleNotAuthorized); return }
 		start()
@@ -311,12 +309,12 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		}
 	}
     
-    func sendResponse(_ deviceResponse: Data) throws {
-        guard status == .requestReceived else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Did not receive a request."); }
-        guard sendResponseManually else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Initialize with send_response_manually to use this function");  }
+  public func sendResponse(_ deviceResponse: Data) throws {
+    guard status == .requestReceived else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Did not receive a request."); }
+    guard sendResponseManually else { throw MdocHelpers.makeError(code: .noRequestReceived, str: error?.localizedDescription ?? "Initialize with send_response_manually to use this function");  }
         
-        prepareDataToSend(deviceResponse)
-        sendDataWithUpdates()
-    }
+    prepareDataToSend(deviceResponse)
+    sendDataWithUpdates()
+  }
 }
 
