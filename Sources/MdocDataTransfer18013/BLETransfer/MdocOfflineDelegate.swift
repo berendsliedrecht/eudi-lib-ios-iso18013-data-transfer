@@ -9,8 +9,6 @@ import MdocSecurity18013
 public protocol MdocOfflineDelegate: AnyObject {
 	func didChangeStatus(_ newStatus: TransferStatus)
 	func didFinishedWithError(_ error: Error)
-    // UserRequestInfo is provided when manual mode is turned off
-	func didReceiveRequest(_ request: UserRequestInfo?, handleSelected: @escaping (Bool, RequestItems?) -> Void)
+	func didReceiveRequest(_ request: UserRequestInfo?, handleSelected: @escaping (Bool, RequestItems?) async -> Void)
 }
-
 

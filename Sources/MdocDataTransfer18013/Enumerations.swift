@@ -49,7 +49,7 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 	case readerKeyMissing
     case noRequestReceived
     case notSetToSendResponseManually
-	
+
 	public var description: String {
 		switch self {
 		case .documents_not_provided_or_manual_mode_is_not_enabled: return "DOCUMENTS_NOT_PROVIDED_OR_MANUAL_MODE_IS_NOT_ENABLED"
@@ -69,26 +69,4 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 		default: return "GENERIC_ERROR"
 		}
 	}
-}
-
-/// String keys for the initialization dictionary
-public enum InitializeKeys: String, Sendable {
-	case document_json_data
-	case document_signup_issuer_signed_data
-	case document_signup_issuer_signed_obj
-	case device_private_key_data
-	case device_private_key_obj
-	case trusted_certificates
-	case device_auth_method
-    case send_response_manually
-}
-
-/// String keys for the user request dictionary
-public enum UserRequestKeys: String, Sendable {
-	case valid_items_requested
-	case error_items_requested
-	case reader_certificate_issuer
-	case reader_auth_validated
-	case reader_certificate_validation_message
-	case reader_legal_name
 }

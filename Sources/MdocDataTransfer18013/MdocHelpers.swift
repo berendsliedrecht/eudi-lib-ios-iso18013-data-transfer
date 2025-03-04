@@ -28,63 +28,31 @@ import SwiftCBOR
 import Logging
 import X509
 
-public typealias RequestItems = [String: [String: [RequestItem]]]
+public typealias RequestItems = [String: [NameSpace: [RequestItem]]]
 
 /// Helper methods
 public class MdocHelpers {
-	
-    public static func initializeData(parameters: [String: Any]) -> (docs: [String: IssuerSigned]?, devicePrivateKeys: [String: CoseKeyPrivate]?, iaca: [SecCertificate]?, dauthMethod: DeviceAuthMethod, sendResponseManually: Bool)? {
-		var docs: [String: IssuerSigned]?
-		var devicePrivateKeys: [String: CoseKeyPrivate]?
-		var iaca: [SecCertificate]?
-		var deviceAuthMethod = DeviceAuthMethod.deviceMac
-        var sendResponseManually = parameters[InitializeKeys.send_response_manually.rawValue] as? Bool ?? false
-        if(!sendResponseManually) {
-            if let d = parameters[InitializeKeys.document_json_data.rawValue] as? [Data] {
-                // load json sample data here, deprecated
-                let sampleData = d.compactMap { $0.decodeJSON(type: SignUpResponse.self) }
-                let randomIds = (0..<d.count).map { _ in UUID().uuidString }
-                docs = Dictionary(uniqueKeysWithValues: sampleData.compactMap { $0.deviceResponse?.documents?.map(\.issuerSigned).first }.enumerated().map { (randomIds[$0], $1) })
-                devicePrivateKeys = Dictionary(uniqueKeysWithValues: sampleData.compactMap { $0.devicePrivateKey }.enumerated().map { (randomIds[$0], $1) })
-            } else if let issObjs = parameters[InitializeKeys.document_signup_issuer_signed_obj.rawValue] as? [String: IssuerSigned], let dpk = parameters[InitializeKeys.device_private_key_obj.rawValue] as? [String: CoseKeyPrivate] {
-                docs = issObjs
-                devicePrivateKeys = dpk
-            } else if let issData = parameters[InitializeKeys.document_signup_issuer_signed_data.rawValue] as? [String: Data], let dpks = parameters[InitializeKeys.device_private_key_data.rawValue] as? [String: Data] {
-                docs = issData.compactMapValues({ IssuerSigned(data: [UInt8]($0))})
-                devicePrivateKeys = dpks.mapValues { CoseKeyPrivate(privateKeyx963Data: $0, crv: .p256) }
-            }
-        }
-		if let i = parameters[InitializeKeys.trusted_certificates.rawValue] as? [Data] {
-			iaca = i.compactMap { SecCertificateCreateWithData(nil, $0 as CFData) }
-		}
-		if let d = parameters[InitializeKeys.device_auth_method.rawValue] as? String, let dam = DeviceAuthMethod(rawValue: d) {
-			deviceAuthMethod = dam
-		}
-//		guard let docs, let devicePrivateKeys else { return nil }
-        return (docs, devicePrivateKeys, iaca, deviceAuthMethod, sendResponseManually)
-	}
-	
 	static var errorNoDocumentsDescriptionKey: String { "doctype_not_found" }
 	static func getErrorNoDocuments(_ docType: String) -> Error { NSError(domain: "\(MdocGattServer.self)", code: 0, userInfo: ["key": Self.errorNoDocumentsDescriptionKey, "%s": docType]) }
-	
+
 	public static func makeError(code: ErrorCode, str: String? = nil) -> NSError {
 		let errorMessage = str ?? NSLocalizedString(code.description, comment: code.description)
 		logger.error(Logger.Message(unicodeScalarLiteral: errorMessage))
 		return NSError(domain: "\(MdocGattServer.self)", code: code.rawValue, userInfo: [NSLocalizedDescriptionKey: errorMessage, "key": code.description])
 	}
-	
-	public static func getSessionDataToSend(sessionEncryption: SessionEncryption?, status: TransferStatus, docToSend: DeviceResponse) -> Result<Data, Error> {
+
+	public static func getSessionDataToSend(sessionEncryption: SessionEncryption?, status: TransferStatus, docToSend: DeviceResponse) async -> Result<Data, Error> {
 		do {
 			guard var sessionEncryption else { logger.error("Session Encryption not initialized"); return .failure(Self.makeError(code: .sessionEncryptionNotInitialized)) }
 			if docToSend.documents == nil { logger.error("Could not create documents to send") }
 			let cborToSend = docToSend.toCBOR(options: CBOROptions())
 			let clearBytesToSend = cborToSend.encode()
-			let cipherData = try sessionEncryption.encrypt(clearBytesToSend)
+			let cipherData = try await sessionEncryption.encrypt(clearBytesToSend)
 			let sd = SessionData(cipher_data: status == .error ? nil : cipherData, status: status == .error ? 11 : 20)
 			return .success(Data(sd.encode(options: CBOROptions())))
 		} catch { return .failure(error) }
 	}
-	
+
 	/// Decrypt the contents of a data object and return a ``DeviceRequest`` object if the data represents a valid device request. If the data does not represent a valid device request, the function returns nil.
 	/// - Parameters:
 	///   - deviceEngagement: deviceEngagement
@@ -95,7 +63,7 @@ public class MdocHelpers {
 	///   - handOver: handOver structure
 	/// - Returns: A ``DeviceRequest`` object
 
-    public static func decodeRequestAndInformUser(deviceEngagement: DeviceEngagement?, docs: [String: IssuerSigned]?, iaca: [SecCertificate], requestData: Data, devicePrivateKeys: [String: CoseKeyPrivate]?, dauthMethod: DeviceAuthMethod?, readerKeyRawData: [UInt8]?, handOver: CBOR, sendResponseManually: Bool) -> Result<(sessionEncryption: SessionEncryption, deviceRequest: DeviceRequest, userRequestInfo: UserRequestInfo?, isValidRequest: Bool), Error> {
+	public static func decodeRequestAndInformUser(deviceEngagement: DeviceEngagement?, docs: [String: IssuerSigned], docDisplayNames: [String: [String: [String: String]]?], iaca: [SecCertificate], requestData: Data, devicePrivateKeys: [String: CoseKeyPrivate], dauthMethod: DeviceAuthMethod, unlockData: [String: Data], readerKeyRawData: [UInt8]?, handOver: CBOR, sendDeviceResponseManually: Bool) async -> Result<(sessionEncryption: SessionEncryption, deviceRequest: DeviceRequest, userRequestInfo: UserRequestInfo?, isValidRequest: Bool), Error> {
 		do {
 			guard let seCbor = try CBOR.decode([UInt8](requestData)) else { logger.error("Request Data is not Cbor"); return .failure(Self.makeError(code: .requestDecodeError)) }
 			guard var se = SessionEstablishment(cbor: seCbor) else { logger.error("Request Data cannot be decoded to session establisment"); return .failure(Self.makeError(code: .requestDecodeError)) }
@@ -106,16 +74,16 @@ public class MdocHelpers {
 			// init session-encryption object from session establish message and device engagement, decrypt data
 			let sessionEncryption = SessionEncryption(se: se, de: deviceEngagement, handOver: handOver)
 			guard var sessionEncryption else { logger.error("Session Encryption not initialized"); return .failure(Self.makeError(code: .sessionEncryptionNotInitialized)) }
-            guard let requestData = try sessionEncryption.decrypt(requestCipherData) else { logger.error("Request data cannot be decrypted"); return .failure(Self.makeError(code: .requestDecodeError)) }
-            guard let deviceRequest = DeviceRequest(data: requestData) else { logger.error("Decrypted data cannot be decoded"); return .failure(Self.makeError(code: .requestDecodeError)) }
-			
-            if(sendResponseManually) {
+			guard let requestData = try await sessionEncryption.decrypt(requestCipherData) else { logger.error("Request data cannot be decrypted"); return .failure(Self.makeError(code: .requestDecodeError)) }
+			guard let deviceRequest = DeviceRequest(data: requestData) else { logger.error("Decrypted data cannot be decoded"); return .failure(Self.makeError(code: .requestDecodeError)) }
+
+            if(sendDeviceResponseManually) {
                 return .success((sessionEncryption: sessionEncryption, deviceRequest: deviceRequest, userRequestInfo: nil, true))
             }
 
-			guard let (drTest, validRequestItems, errorRequestItems) = try Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs!, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, devicePrivateKeys: devicePrivateKeys!, dauthMethod: dauthMethod!) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
+			guard let (drTest, validRequestItems, errorRequestItems) = try await Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs, docDisplayNames: docDisplayNames, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, devicePrivateKeys: devicePrivateKeys, dauthMethod: dauthMethod, unlockData: unlockData) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
 			let bInvalidReq = (drTest.documents == nil)
-			var userRequestInfo = UserRequestInfo(validItemsRequested: validRequestItems, errorItemsRequested: errorRequestItems)
+			var userRequestInfo = UserRequestInfo(docDataFormats: docs.mapValues { _ in .cbor }, validItemsRequested: validRequestItems, errorItemsRequested: errorRequestItems)
 			if let docR = deviceRequest.docRequests.first {
 				let mdocAuth = MdocReaderAuthentication(transcript: sessionEncryption.transcript)
 				if let readerAuthRawCBOR = docR.readerAuthRawCBOR, case let certData = docR.readerCertificates, certData.count > 0, let x509 = try? X509.Certificate(derEncoded: [UInt8](certData.first!)), let (b,reasonFailure) = try? mdocAuth.validateReaderAuth(readerAuthCBOR: readerAuthRawCBOR, readerAuthX5c: certData, itemsRequestRawData: docR.itemsRequestRawData!, rootCerts: iaca) {
@@ -127,7 +95,7 @@ public class MdocHelpers {
 			return .success((sessionEncryption: sessionEncryption, deviceRequest: deviceRequest, userRequestInfo: userRequestInfo, isValidRequest: !bInvalidReq))
 		} catch { return .failure(error) }
 	}
-	
+
 	/// Construct ``DeviceResponse`` object to present from wallet data and input device request
 	/// - Parameters:
 	///   - deviceRequest: Device request coming from verifier
@@ -139,27 +107,30 @@ public class MdocHelpers {
 	///   - sessionTranscript: Session Transcript object
 	///   - dauthMethod: Mdoc Authentication method
 	/// - Returns: (Device response object, valid requested items, error request items) tuple
-	public static func getDeviceResponseToSend(deviceRequest: DeviceRequest?, issuerSigned: [String: IssuerSigned], selectedItems: RequestItems? = nil, sessionEncryption: SessionEncryption? = nil, eReaderKey: CoseKey? = nil, devicePrivateKeys: [String: CoseKeyPrivate], sessionTranscript: SessionTranscript? = nil, dauthMethod: DeviceAuthMethod) throws -> (response: DeviceResponse, validRequestItems: RequestItems, errorRequestItems: RequestItems)? {
+	public static func getDeviceResponseToSend(deviceRequest: DeviceRequest?, issuerSigned: [String: IssuerSigned], docDisplayNames: [String: [String: [String: String]]?], selectedItems: RequestItems? = nil, sessionEncryption: SessionEncryption? = nil, eReaderKey: CoseKey? = nil, devicePrivateKeys: [String: CoseKeyPrivate], sessionTranscript: SessionTranscript? = nil, dauthMethod: DeviceAuthMethod, unlockData: [String: Data]) async throws -> (deviceResponse: DeviceResponse, validRequestItems: RequestItems, errorRequestItems: RequestItems)? {
 		var docFiltered = [Document](); var docErrors = [[DocType: UInt64]]()
 		var validReqItemsDocDict = RequestItems(); var errorReqItemsDocDict = RequestItems()
 		guard deviceRequest != nil || selectedItems != nil else { fatalError("Invalid call") }
 		let haveSelectedItems = selectedItems != nil
 		// doc.id's (if have selected items), otherwise doc.types
 		let reqDocIdsOrDocTypes = if haveSelectedItems { Array(selectedItems!.keys) } else { deviceRequest!.docRequests.map(\.itemsRequest.docType) }
+		var docId: String?
 		for reqDocIdOrDocType in reqDocIdsOrDocTypes {
 			var docReq: DocRequest? // if selected items is null
 			if haveSelectedItems == false {
 				docReq = deviceRequest?.docRequests.findDoc(name: reqDocIdOrDocType)
-				guard let (_, _) = Array(issuerSigned.values).findDoc(name: reqDocIdOrDocType) else {
+				guard let pair = issuerSigned.first(where: { $1.issuerAuth.mso.docType == reqDocIdOrDocType}) else {
 					docErrors.append([reqDocIdOrDocType: UInt64(0)])
 					errorReqItemsDocDict[reqDocIdOrDocType] = [:]
 					continue
 				}
+				docId = pair.key
 			} else {
 				guard issuerSigned[reqDocIdOrDocType] != nil else { continue }
 			}
-			let devicePrivateKey = devicePrivateKeys[reqDocIdOrDocType] ?? CoseKeyPrivate(crv: .p256) // used only if doc.id
+			let devicePrivateKey = devicePrivateKeys[reqDocIdOrDocType] // used only if doc.id
 			let doc = if haveSelectedItems { issuerSigned[reqDocIdOrDocType]! } else { Array(issuerSigned.values).findDoc(name: reqDocIdOrDocType)!.0 }
+			let displayNames = if haveSelectedItems { docDisplayNames[reqDocIdOrDocType] } else { docDisplayNames[docId!] }
 			// Document's data must be in CBOR bytes that has the IssuerSigned structure according to ISO 23220-4
 			// Currently, the library does not support IssuerSigned structure without the nameSpaces field.
 			guard let issuerNs = doc.issuerNameSpaces else { logger.error("Document does not contain issuer namespaces"); return nil }
@@ -184,7 +155,7 @@ public class MdocHelpers {
 				}
 				if itemsToAdd.count > 0 {
 					nsItemsToAdd[reqNamespace] = itemsToAdd
-					validReqItemsNsDict[reqNamespace] = itemsToAdd.map { RequestItem(elementIdentifier: $0.elementIdentifier, intentToRetain: docReq?.itemsRequest.requestNameSpaces.nameSpaces[reqNamespace]?.dataElements[$0.elementIdentifier], isOptional: nil) }
+					validReqItemsNsDict[reqNamespace] = itemsToAdd.map { RequestItem(elementIdentifier: $0.elementIdentifier, displayName: displayNames??[reqNamespace]?[$0.elementIdentifier], intentToRetain: docReq?.itemsRequest.requestNameSpaces.nameSpaces[reqNamespace]?.dataElements[$0.elementIdentifier], isOptional: nil) }
 				}
 				let errorItemsSet = itemsReqSet.subtracting(itemsSet)
 				if errorItemsSet.count > 0 {
@@ -197,10 +168,10 @@ public class MdocHelpers {
 				let issToAdd = IssuerSigned(issuerNameSpaces: IssuerNameSpaces(nameSpaces: nsItemsToAdd), issuerAuth: issuerAuthToAdd)
 				var devSignedToAdd: DeviceSigned? = nil
 				let sessionTranscript = sessionEncryption?.transcript ?? sessionTranscript
-				if let eReaderKey, let sessionTranscript {
+				if let eReaderKey, let sessionTranscript, let devicePrivateKey {
 					let authKeys = CoseKeyExchange(publicKey: eReaderKey, privateKey: devicePrivateKey)
 					let mdocAuth = MdocAuthentication(transcript: sessionTranscript, authKeys: authKeys)
-					guard let devAuth = try mdocAuth.getDeviceAuthForTransfer(docType: doc.issuerAuth.mso.docType, dauthMethod: dauthMethod) else {
+					guard let devAuth = try await mdocAuth.getDeviceAuthForTransfer(docType: doc.issuerAuth.mso.docType, dauthMethod: dauthMethod, unlockData: unlockData[reqDocIdOrDocType]) else {
 						logger.error("Cannot create device auth"); return nil
 					}
 					devSignedToAdd = DeviceSigned(deviceAuth: devAuth)
@@ -218,12 +189,12 @@ public class MdocHelpers {
 		let deviceResponseToSend = DeviceResponse(version: DeviceResponse.defaultVersion, documents: documentsToAdd, documentErrors: documentErrors, status: 0)
 		return (deviceResponseToSend, validReqItemsDocDict, errorReqItemsDocDict)
 	}
-	
+
 	/// Returns the number of blocks that dataLength bytes of data can be split into, given a maximum block size of maxBlockSize bytes.
 	/// - Parameters:
 	///   - dataLength: Length of data to be split
 	///   - maxBlockSize: The maximum block size
-	/// - Returns: Number of blocks 
+	/// - Returns: Number of blocks
 	public static func CountNumBlocks(dataLength: Int, maxBlockSize: Int) -> Int {
 		let blockSize = maxBlockSize
 		var numBlocks = 0
@@ -237,7 +208,7 @@ public class MdocHelpers {
 		}
 		return numBlocks
 	}
-	
+
 	/// Creates a block for a given block id from a data object. The block size is limited to maxBlockSize bytes.
 	/// - Parameters:
 	///   - data: The data object to be sent
@@ -255,9 +226,9 @@ public class MdocHelpers {
 		let chunk = data.subdata(in: start..<end)
 		return (chunk,bEnd)
 	}
-	
+
 	#if os(iOS)
-	
+
 	/// Check if BLE access is allowed, and if not, present a dialog that opens settings
 	/// - Parameters:
 	///   - vc: The view controller that will present the settings
@@ -279,7 +250,7 @@ public class MdocHelpers {
 			logger.info("Unknown authorization status")
 		}
 	}
-	
+
 	/// Check if the user has given permission to access the camera. If not, ask them to go to the settings app to give permission.
 	/// - Parameters:
 	///   - vc:  The view controller that will present the settings
@@ -307,7 +278,7 @@ public class MdocHelpers {
 			logger.info("Unknown authorization status")
 		}
 	}
-	
+
 	/// Present an alert controller with a message, and two actions, one to cancel, and one to go to the settings page.
 	/// - Parameters:
 	///   - vc: The view controller that will present the settings
@@ -325,7 +296,7 @@ public class MdocHelpers {
 		})
 		vc.present(alertController, animated: true)
 	}
-	
+
 	/// Finds the top view controller in the view hierarchy of the app. It is used to present a new view controller on top of any existing view controllers.
 	@MainActor
 	public static func getTopViewController(base: UIViewController? = UIApplication.shared.windows.first { $0.isKeyWindow }?.rootViewController) -> UIViewController? {
@@ -338,7 +309,7 @@ public class MdocHelpers {
 		}
 		return base
 	}
-	
+
 	#endif
 
 	/// Get the common name (CN) from the certificate distringuished name (DN)
